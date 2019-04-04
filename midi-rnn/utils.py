@@ -10,12 +10,11 @@ def log(message, verbose):
 
 def parse_midi(path):
     midi = None
-    with open(path, 'r') as f:
-        try:
-            midi = pretty_midi.PrettyMIDI(f)
-            midi.remove_invalid_notes()
-        except:
-            pass
+    try:
+        midi = pretty_midi.PrettyMIDI(path)
+        midi.remove_invalid_notes()
+    except Exception as e:
+        raise Exception(("%s\nerror readying midi file %s" % (e, path)))
     return midi
 
 def get_percent_monophonic(pm_instrument_roll):
@@ -29,7 +28,7 @@ def get_percent_monophonic(pm_instrument_roll):
         return 0.0
     else: # no notes of any kind
         return 0.0
-    
+
 def filter_monophonic(pm_instruments, percent_monophonic=0.99):
     return [i for i in pm_instruments if \
             get_percent_monophonic(i.get_piano_roll()) >= percent_monophonic]
@@ -37,7 +36,7 @@ def filter_monophonic(pm_instruments, percent_monophonic=0.99):
 
 # if the experiment dir doesn't exist create it and its subfolders
 def create_experiment_dir(experiment_dir, verbose=False):
-    
+
     # if the experiment directory was specified and already exists
     if experiment_dir != 'experiments/default' and \
        os.path.exists(experiment_dir):
@@ -47,11 +46,11 @@ def create_experiment_dir(experiment_dir, verbose=False):
 
     # if the experiment directory was not specified, create a new numeric folder
     if experiment_dir == 'experiments/default':
-    	
+
     	experiments = os.listdir('experiments')
     	experiments = [dir_ for dir_ in experiments \
     	               if os.path.isdir(os.path.join('experiments', dir_))]
-    	
+
     	most_recent_exp = 0
     	for dir_ in experiments:
     		try:
@@ -60,7 +59,7 @@ def create_experiment_dir(experiment_dir, verbose=False):
     			# ignrore non-numeric folders in experiments/
     			pass
 
-    	experiment_dir = os.path.join('experiments', 
+    	experiment_dir = os.path.join('experiments',
     		                          str(most_recent_exp + 1).rjust(2, '0'))
 
     os.mkdir(experiment_dir)
@@ -69,14 +68,14 @@ def create_experiment_dir(experiment_dir, verbose=False):
     log('Created checkpoint directory {}'.format(os.path.join(experiment_dir, 'checkpoints')),
     	verbose)
     os.mkdir(os.path.join(experiment_dir, 'tensorboard-logs'))
-    log('Created log directory {}'.format(os.path.join(experiment_dir, 'tensorboard-logs')), 
+    log('Created log directory {}'.format(os.path.join(experiment_dir, 'tensorboard-logs')),
     	verbose)
 
     return experiment_dir
 
 # load data with a lazzy loader
-def get_data_generator(midi_paths, 
-                       window_size=20, 
+def get_data_generator(midi_paths,
+                       window_size=20,
                        batch_size=32,
                        num_threads=8,
                        max_files_in_ram=170):
@@ -106,12 +105,12 @@ def get_data_generator(midi_paths,
         while batch_index + batch_size < len(data[0]):
             # print('getting data...')
             # print('yielding small batch: {}'.format(batch_size))
-            
-            res = (data[0][batch_index: batch_index + batch_size], 
+
+            yield (data[0][batch_index: batch_index + batch_size],
                    data[1][batch_index: batch_index + batch_size])
-            yield res
-            batch_index = batch_index + batch_size
-        
+            # yield res
+            batch_index += batch_size
+
         # probably unneeded but why not
         del parsed # free the mem
         del data # free the mem
@@ -127,31 +126,31 @@ def load_model_from_checkpoint(model_dir):
         model = model_from_json(f.read())
 
     epoch = 0
-    newest_checkpoint = max(glob.iglob(model_dir + 
-    	                    '/checkpoints/*.hdf5'), 
+    newest_checkpoint = max(glob.iglob(model_dir +
+    	                    '/checkpoints/*.hdf5'),
                             key=os.path.getctime)
 
-    if newest_checkpoint: 
+    if newest_checkpoint:
        epoch = int(newest_checkpoint[-22:-19])
        model.load_weights(newest_checkpoint)
 
     return model, epoch
 
 def generate(model, seeds, window_size, length, num_to_gen, instrument_name):
-    
+
     # generate a pretty midi file from a model using a seed
     def _gen(model, seed, window_size, length):
-        
+
         generated = []
         # ring buffer
         buf = np.copy(seed).tolist()
         while len(generated) < length:
             arr = np.expand_dims(np.asarray(buf), 0)
             pred = model.predict(arr)
-            
+
             # argmax sampling (NOT RECOMMENDED), or...
             # index = np.argmax(pred)
-            
+
             # prob distrobuition sampling
             index = np.random.choice(range(0, seed.shape[1]), p=pred[0])
             pred = np.zeros(seed.shape[1])
@@ -172,8 +171,8 @@ def generate(model, seeds, window_size, length, num_to_gen, instrument_name):
 
 # create a pretty midi file with a single instrument using the one-hot encoding
 # output of keras model.predict.
-def _network_output_to_midi(windows, 
-                           instrument_name='Acoustic Grand Piano', 
+def _network_output_to_midi(windows,
+                           instrument_name='Acoustic Grand Piano',
                            allow_represses=False):
 
     # Create a PrettyMIDI object
@@ -181,7 +180,7 @@ def _network_output_to_midi(windows,
     # Create an Instrument instance for a cello instrument
     instrument_program = pretty_midi.instrument_name_to_program(instrument_name)
     instrument = pretty_midi.Instrument(program=instrument_program)
-    
+
     cur_note = None # an invalid note to start with
     cur_note_start = None
     clock = 0
@@ -190,16 +189,16 @@ def _network_output_to_midi(windows,
     for step in windows:
 
         note_num = np.argmax(step) - 1
-        
+
         # a note has changed
         if allow_represses or note_num != cur_note:
-            
+
             # if a note has been played before and it wasn't a rest
-            if cur_note is not None and cur_note >= 0:            
+            if cur_note is not None and cur_note >= 0:
                 # add the last note, now that we have its end time
-                note = pretty_midi.Note(velocity=127, 
-                                        pitch=int(cur_note), 
-                                        start=cur_note_start, 
+                note = pretty_midi.Note(velocity=127,
+                                        pitch=int(cur_note),
+                                        start=cur_note_start,
                                         end=clock)
                 instrument.notes.append(note)
 
@@ -235,17 +234,17 @@ def _windows_from_monophonic_instruments(midi, window_size):
 # This allows us to encode rests.
 # expects pm_instrument to be monophonic.
 def _encode_sliding_windows(pm_instrument, window_size):
-    
+
     roll = np.copy(pm_instrument.get_piano_roll(fs=4).T)
 
     # trim beginning silence
     summed = np.sum(roll, axis=1)
     mask = (summed > 0).astype(float)
     roll = roll[np.argmax(mask):]
-    
+
     # transform note velocities into 1s
     roll = (roll > 0).astype(float)
-    
+
     # calculate the percentage of the events that are rests
     # s = np.sum(roll, axis=1)
     # num_silence = len(np.where(s == 0)[0])
@@ -255,7 +254,7 @@ def _encode_sliding_windows(pm_instrument, window_size):
     rests = np.sum(roll, axis=1)
     rests = (rests != 1).astype(float)
     roll = np.insert(roll, 0, rests, axis=1)
-    
+
     windows = []
     for i in range(0, roll.shape[0] - window_size - 1):
         windows.append((roll[i:i + window_size], roll[i + window_size + 1]))
